@@ -11,34 +11,37 @@ const statusClass=v=>/active|complete|completed|paid|eligible|final|negative|ack
 const badge=v=>`<span class="badge ${statusClass(v)}">${esc(pretty(v))}</span>`;
 const page=()=>location.pathname.split('/').pop()?.replace('.html','')||'dashboard';
 const storageKey=()=>`s4u_${C.portalCode}_membership`;
+const subscriptionKey=()=>`s4u_${C.portalCode}_subscription`;
 const stored=()=>localStorage.getItem(storageKey())||'';
+const storedSubscription=()=>localStorage.getItem(subscriptionKey())||'';
 const saveMid=v=>{if(v)localStorage.setItem(storageKey(),v)};
+const saveSubscription=v=>{if(v)localStorage.setItem(subscriptionKey(),v)};
 const cfgPage=id=>C.pages.find(x=>x.id===id)||{id,label:pretty(id),icon:'•'};
 
 async function getSession(){const {data:{session},error}=await sb.auth.getSession();if(error)throw error;return session}
 async function invoke(name,body={}){
   const s=await getSession();if(!s)throw Object.assign(new Error('AUTH_REQUIRED'),{status:401});
-  const r=await fetch(`${C.workforceUrl}/functions/v1/${name}`,{method:'POST',headers:{'Content-Type':'application/json','Authorization':`Bearer ${s.access_token}`,'apikey':C.workforceKey},body:JSON.stringify(body)});
+  const r=await fetch(`${C.workforceUrl}/functions/v1/${name}`,{method:'POST',headers:{'Content-Type':'application/json','Authorization':`Bearer ${s.access_token}`,'apikey':C.workforceKey},body:JSON.stringify(name==='workforce-session-context'?body:{portal_code:C.portalCode,membership_id:stored()||undefined,subscription_id:storedSubscription()||undefined,...body})});
   const d=await r.json().catch(()=>({}));
   if(!r.ok||d.error)throw Object.assign(new Error(d.error||`Request failed (${r.status}).`),{status:r.status,payload:d});
   return d;
 }
-async function access(){const b={requested_portal_code:C.portalCode};if(stored())b.membership_id=stored();return invoke('workforce-session-context',b)}
+async function access(){const b={requested_portal_code:C.portalCode,requested_page:page()};if(stored())b.membership_id=stored();if(storedSubscription())b.subscription_id=storedSubscription();return invoke('workforce-session-context',b)}
 
 function shell(ctx){
   const current=page();
-  const links=C.pages.map(x=>`<a href="/${x.id}.html" class="${current===x.id?'active':''}"><span class="ico">${esc(x.icon)}</span><span>${esc(x.label)}</span></a>`).join('');
+  const allowed=Array.isArray(ctx.navigation)&&ctx.navigation.length?ctx.navigation:C.pages;const links=allowed.map(n=>{const id=String(n.id||'').replaceAll('_','-'),fallback=cfgPage(id),label=n.label||fallback.label,icon=n.icon||fallback.icon,href=n.href||`/${id}.html`;return `<a href="${esc(href)}" class="${current===id?'active':''}"><span class="ico">${esc(icon)}</span><span>${esc(label)}</span></a>`}).join('');
   document.body.className='';
-  document.body.innerHTML=`<div class="app"><aside class="side" id="side"><div class="brand"><img src="/assets/img/logo.png" alt="${esc(C.label)}"></div><nav class="nav"><div class="nav-title">${esc(ctx.membership?.organization_name||C.label)}</div>${links}</nav><div class="side-foot"><div style="font-size:9px;color:#9fb3c7">Portal</div><div style="font-size:11px;font-weight:800;color:#fff;margin-top:3px">${esc(C.domain)}</div></div></aside><main class="main"><header class="top"><div class="top-left"><button class="menu" id="menu">☰</button><span class="crumb">${esc(C.label)} / ${esc(cfgPage(current).label)}</span></div><div class="top-right"><span class="pill">${esc(C.kind==='self'?'Self Service':'Management')}</span>${C.agency?`<span class="pill">${esc(C.agency)}</span>`:''}<button class="signout" id="logout">Sign out</button></div></header><div class="content"><div id="error"></div><section class="hero"><span class="hero-kicker">${esc(C.label)}</span><h1>${esc(cfgPage(current).label)}</h1><p id="subtitle">Loading portal workspace.</p><div class="hero-actions" id="actions"></div></section><section class="section" id="content"><div class="panel"><div class="loading-msg">Loading…</div></div></section></div></main></div>`;
+  document.body.innerHTML=`<div class="app"><aside class="side" id="side"><div class="brand"><img class="brand-logo brand-logo-ready" src="/assets/img/logo.png" alt="${esc(C.label)}"></div><nav class="nav"><div class="nav-title">${esc(ctx.membership?.organization_name||C.label)}</div>${links}</nav><div class="side-foot"><div style="font-size:9px;color:#9fb3c7">Portal</div><div style="font-size:11px;font-weight:800;color:#fff;margin-top:3px">${esc(C.domain)}</div></div></aside><main class="main"><header class="top"><div class="top-left"><button class="menu" id="menu">☰</button><span class="crumb">${esc(C.label)} / ${esc(cfgPage(current).label)}</span></div><div class="top-right"><span class="pill">${esc(C.kind==='self'?'Self Service':'Management')}</span>${C.agency?`<span class="pill">${esc(C.agency)}</span>`:''}<button class="signout" id="logout">Sign out</button></div></header><div class="content"><div id="error"></div><section class="hero"><span class="hero-kicker">${esc(C.label)}</span><h1>${esc(cfgPage(current).label)}</h1><p id="subtitle">Loading portal workspace.</p><div class="hero-actions" id="actions"></div></section><section class="section" id="content"><div class="panel"><div class="loading-msg">Loading…</div></div></section></div></main></div>`;
   $('#menu').onclick=()=>$('#side').classList.toggle('open');
-  $('#logout').onclick=async()=>{await sb.auth.signOut();location.replace('/login.html')};
+  $('#logout').onclick=async()=>{localStorage.removeItem(storageKey());localStorage.removeItem(subscriptionKey());await sb.auth.signOut();location.replace('/login.html')};
 }
 function metric(label,value,note=''){return `<div class="metric"><small>${esc(label)}</small><strong>${esc(value)}</strong><span>${esc(note)}</span></div>`}
 function read(o,keys){for(const k of keys){let v=o;for(const p of k.split('.'))v=v?.[p];if(v!==undefined&&v!==null&&v!=='')return v}return'—'}
 const dateCell=v=>fmt(v),moneyCell=v=>money(v),badgeCell=v=>badge(v);
 const COLS={
   employers:[['Employer',['legal_name','workforce_display_name']],['Status',['status'],badgeCell],['USDOT',['dot_number']],['Contact',['primary_contact_email']],['State',['state']]],
-  employees:[['Name',['display_name','first_name']],['Employee #',['employee_number']],['Position',['job_title']],['Agency',['dot_agency']],['Status',['employment_status'],badgeCell]],
+  employees:[['Name',['display_name','first_name']],['Employee #',['employee_number']],['Type',['workforce_worker_type'],badgeCell],['Position',['job_title']],['Status',['employment_status'],badgeCell]],
   programs:[['Program',['name']],['Type',['program_type'],badgeCell],['Agency',['dot_agency']],['Category',['regulatory_category']],['Status',['status'],badgeCell]],
   pools:[['Pool',['name']],['Type',['pool_type']],['Agency',['dot_agency']],['Drug Rate',['drug_random_rate']],['Status',['status'],badgeCell]],
   selections:[['Date',['selection_date','selected_at'],dateCell],['Type',['selection_type']],['Population',['population_size']],['Drug',['drug_selection_count','drug_selected']],['Status',['status'],badgeCell]],
@@ -52,7 +55,10 @@ const COLS={
   training:[['Training',['training_title','title']],['Provider',['provider']],['Status',['status'],badgeCell],['Completed',['completed_at'],dateCell],['Expires',['expires_at'],dateCell]],
   policies:[['Policy',['policy_name','ctpa_policy_documents.title']],['Status',['status'],badgeCell],['Distributed',['distributed_at'],dateCell],['Acknowledged',['acknowledged_at'],dateCell]],
   accidents:[['Occurred',['occurred_at'],dateCell],['Type',['accident_type']],['Required',['testing_required'],v=>badge(v===true?'required':v===false?'not required':'pending')],['Drug',['drug_test_required'],v=>badge(v===true?'required':'—')],['Alcohol',['alcohol_test_required'],v=>badge(v===true?'required':'—')]],
-  members:[['User',['profiles.display_name','profiles.first_name','user_id']],['Role',['roles.name','roles.code']],['Status',['status'],badgeCell],['Primary',['is_primary'],v=>badge(v===true?'yes':'no')]]
+  members:[['User',['profiles.display_name','profiles.first_name','user_id']],['Role',['roles.name','roles.code']],['Status',['status'],badgeCell],['Primary',['is_primary'],v=>badge(v===true?'yes':'no')]],
+  locations:[['Location',['name']],['Employer',['employer.legal_name','employer.dba_name']],['Type',['location_type']],['City',['city']],['State',['state']]],
+  integrations:[['Integration',['name']],['Type',['integration_type']],['Provider',['provider']],['Status',['status'],badgeCell],['Last Sync',['last_sync_at'],dateCell]],
+  audit:[['Action',['action']],['Resource',['resource_type']],['Actor',['actor_profile.display_name','actor_user_id']],['When',['event_at'],dateCell]]
 };
 function table(title,rows,cols){
   const body=rows.length?rows.map(r=>`<tr>${cols.map(c=>`<td>${c[2]?c[2](read(r,c[1])):esc(read(r,c[1]))}</td>`).join('')}</tr>`).join(''):`<tr><td colspan="${cols.length}"><div class="empty">No records available.</div></td></tr>`;
@@ -69,13 +75,20 @@ function setSubtitle(v){$('#subtitle').textContent=v}
 function addAction(label,fn,secondary=false){const b=document.createElement('button');b.className=`btn ${secondary?'secondary':'primary'}`;b.textContent=label;b.onclick=fn;$('#actions').appendChild(b)}
 
 async function ctpaData(p){
+  if(p==='employers')return invoke('workforce-ctpa-employers',{action:'workspace'});
   if(p==='people'||p==='programs')return invoke('workforce-ctpa-employees-programs',{action:'workspace'});
   if(p==='pools')return invoke('workforce-ctpa-pools',{action:'workspace'});
   if(p==='testing')return invoke('workforce-ctpa-testing',{action:'workspace'});
   if(p==='compliance')return invoke('workforce-ctpa-compliance',{action:'workspace'});
   if(p==='documents')return invoke('workforce-ctpa-documents',{action:'workspace'});
   if(p==='notifications')return invoke('workforce-ctpa-notifications',{action:'workspace'});
-  const scope={dashboard:'dashboard',employers:'all',selections:'selections',results:'results',reports:'reports',billing:'dashboard'}[p]||'dashboard';
+  if(p==='team')return invoke('workforce-ctpa-admin',{action:'workspace',scope:'staff'});
+  if(p==='locations')return invoke('workforce-ctpa-admin',{action:'workspace',scope:'locations'});
+  if(p==='branding')return invoke('workforce-ctpa-admin',{action:'workspace',scope:'branding'});
+  if(p==='integrations')return invoke('workforce-ctpa-admin',{action:'workspace',scope:'integrations'});
+  if(p==='audit-history')return invoke('workforce-ctpa-admin',{action:'workspace',scope:'audit'});
+  if(p==='billing')return invoke('workforce-ctpa-admin',{action:'workspace',scope:'billing'});
+  const scope={dashboard:'dashboard',employers:'all',selections:'selections',results:'results',reports:'reports'}[p]||'dashboard';
   return invoke('workforce-ctpa-portal',{action:'workspace',scope});
 }
 async function employerData(p){
@@ -86,6 +99,11 @@ async function employerData(p){
   if(p==='documents')return invoke('workforce-employer-documents',{action:'workspace'});
   if(p==='results')return invoke('workforce-employer-results',{action:'workspace'}).catch(()=>invoke('workforce-employer-management',{action:'results'}));
   if(p==='notifications')return invoke('workforce-employer-notifications',{action:'workspace'}).catch(()=>invoke('workforce-employer-management',{action:'notifications'}));
+  if(p==='consents')return invoke('workforce-employer-management',{action:'consent_workspace'});
+  if(p==='locations')return invoke('workforce-employer-management',{action:'locations'});
+  if(p==='branding')return invoke('workforce-employer-management',{action:'branding'});
+  if(p==='audit-history')return invoke('workforce-employer-management',{action:'audit'});
+  if(p==='integrations')return invoke('workforce-employer-management',{action:'entitlements'});
   const map={dashboard:'overview',company:'settings',people:'overview',programs:'overview',pools:'overview',selections:'selection_history',compliance:'compliance_detail',reports:'reports',billing:'subscription',team:'members','post-accident':'overview'};
   return invoke('workforce-employer-management',{action:map[p]||'overview'});
 }
@@ -97,7 +115,7 @@ function dashboard(ctx,d){
   if(C.kind==='self')m=[['Testing',(d.testing_orders||[]).length,'My testing orders'],['Results',(d.results||d.result_reports||[]).length,'My available results'],['Documents',(d.documents||[]).length,'My documents'],['Training',(d.training||[]).length,'My training records']];
   else if(C.kind==='ctpa')m=[['Employers',(d.employers||[]).length,'Managed employers'],['People',(d.employees||[]).length,'Covered people'],['Programs',(d.programs||[]).length,'Testing programs'],['Testing',(d.testing_orders||[]).length,'Testing orders']];
   else m=[['People',(d.employees||[]).length,'Company roster'],['Programs',(d.programs||[]).length,'Programs'],['Testing',(d.testing_orders||d.orders||[]).length,'Orders'],['Compliance',(d.compliance_cases||d.cases||[]).filter(x=>!['closed','resolved'].includes(norm(x.status))).length,'Open cases']];
-  const quick=C.pages.filter(x=>!['dashboard','profile','company'].includes(x.id)).slice(0,6);
+  const navPages=(Array.isArray(ctx.navigation)&&ctx.navigation.length?ctx.navigation:C.pages).map(n=>({id:String(n.id||'').replaceAll('_','-'),label:n.label||cfgPage(String(n.id||'').replaceAll('_','-')).label}));const quick=navPages.filter(x=>!['dashboard','profile','company'].includes(x.id)).slice(0,6);
   return `<div class="metrics">${m.map(x=>metric(...x)).join('')}</div><div class="section"><div class="cards">${quick.map(x=>`<a class="card" href="/${x.id}.html"><strong>${esc(x.label)}</strong><span>Open ${esc(x.label.toLowerCase())}.</span></a>`).join('')}</div></div>`;
 }
 function profileView(d){const x=d.employee||d.employer||{};return `<div class="metrics">${metric('Name',x.legal_name||[x.first_name,x.last_name].filter(Boolean).join(' ')||'—')}${metric('Email',x.email||x.primary_contact_email||'—')}${metric('Phone',x.mobile||x.phone||'—')}${metric('Status',pretty(x.employment_status||x.status||'—'))}</div>`}
@@ -146,6 +164,7 @@ function wireSelfActions(p,d,ctx){
   if(p==='credentials')addAction('Submit Credential',()=>modal('Submit Credential',[{name:'credential_type',label:'Credential type',required:true},{name:'credential_number',label:'Credential number'},{name:'issuing_state',label:'Issuing state'},{name:'expires_at',label:'Expiration date',type:'date'}],async v=>invoke('workforce-employee-portal',{action:'save_credential',membership_id:stored(),credential:v})));
 }
 function wireManagementActions(p,d,ctx){
+  if(C.kind==='ctpa'&&p==='employers')addAction('Add Employer',()=>modal('Add Employer',[{name:'legal_name',label:'Legal company name',required:true},{name:'dba_name',label:'DBA name'},{name:'primary_contact_email',label:'Primary contact email',type:'email'},{name:'phone',label:'Phone'},{name:'state',label:'State'}],async v=>invoke('workforce-ctpa-employers',{action:'save_employer',employer:{...v,status:'active'}})));
   if(C.kind==='agency'){
     if(p==='agency-configuration'||['authorizations','contractors','random-plan','policy','anti-drug-plan','alcohol-misuse-plan','periodic-testing'].includes(p)){
       const r=(d.registrations||[])[0]||{},cfg=r.configuration||{};
@@ -155,16 +174,21 @@ function wireManagementActions(p,d,ctx){
     if(['drivers','covered-workers','mariners'].includes(p))addAction('Add Covered Worker',()=>modal('Add Covered Worker',[{name:'first_name',label:'First name',required:true},{name:'last_name',label:'Last name',required:true},{name:'employee_number',label:'Employee number'},{name:'email',label:'Email',type:'email'},{name:'job_title',label:'Safety-sensitive position'}],async v=>invoke('workforce-employer-management',{action:'save_employee',employee:{...v,dot_covered:true,dot_agency:C.agency,safety_sensitive:true,employment_status:'active'}})));
     return;
   }
-  if(p==='people')addAction(C.surface==='dot'?'Add Driver / Employee':'Add Employee',()=>{
+  if(p==='people')addAction(C.surface==='dot'?'Add Driver / Employee':'Add Employee / Driver',()=>{
     const fields=[];
     if(C.kind==='ctpa')fields.push({name:'employer_id',label:'Client Employer',type:'select',required:true,options:(d.employers||[]).map(x=>({value:x.id,label:x.legal_name||x.dba_name||x.id}))});
     fields.push({name:'first_name',label:'First name',required:true},{name:'last_name',label:'Last name',required:true},{name:'employee_number',label:'Employee number'},{name:'email',label:'Email',type:'email'},{name:'job_title',label:'Job title'});
+    if(C.surface==='workforce')fields.push({name:'workforce_worker_type',label:'Portal type',type:'select',value:'employee',options:[{value:'employee',label:'Employee'},{value:'driver',label:'NON-DOT Driver'}]});
     if(C.surface==='dot')fields.push({name:'dot_agency',label:'DOT Agency',type:'select',value:'FMCSA',options:['FMCSA','FAA','FRA','FTA','PHMSA','USCG'].map(x=>({value:x,label:x}))});
-    modal('Add Employee',fields,async v=>{
+    modal(C.surface==='workforce'?'Add Employee / Driver':'Add Employee',fields,async v=>{
       if(C.kind==='ctpa')return invoke('workforce-ctpa-employees-programs',{action:'save_employee',employee:{...v,dot_covered:C.surface==='dot',employment_status:'active',safety_sensitive:C.surface==='dot'}});
       return invoke('workforce-employer-management',{action:'save_employee',employee:{...v,dot_covered:C.surface==='dot',employment_status:'active',safety_sensitive:C.surface==='dot'}});
     });
   });
+  if(C.kind==='employer'&&p==='people'){
+    const eligible=(d.employees||[]).filter(x=>x.email);
+    if(eligible.length)addAction('Invite to Self-Service',()=>modal('Invite Employee / Driver',[{name:'employee_id',label:'Employee / Driver',type:'select',required:true,options:eligible.map(x=>({value:x.id,label:[x.first_name,x.last_name].filter(Boolean).join(' ')||x.email||x.id}))}],async v=>invoke('workforce-employer-management',{action:'invite_employee',employee:{id:v.employee_id}})),true);
+  }
   if(p==='programs')addAction('Add Program',()=>{
     const fields=[];
     if(C.kind==='ctpa')fields.push({name:'employer_id',label:'Client Employer',type:'select',required:true,options:(d.employers||[]).map(x=>({value:x.id,label:x.legal_name||x.dba_name||x.id}))});
@@ -180,7 +204,7 @@ function wireManagementActions(p,d,ctx){
     const employees=d.employees||[],programs=d.programs||[],employers=d.employers||[];
     const fields=[];
     if(C.kind==='ctpa')fields.push({name:'employer_id',label:'Client Employer',type:'select',required:true,options:employers.map(x=>({value:x.id,label:x.legal_name||x.id}))});
-    fields.push({name:'employee_id',label:C.surface==='dot'?'Driver / Employee':'Employee',type:'select',required:true,options:employees.map(x=>({value:x.id,label:[x.first_name,x.last_name].filter(Boolean).join(' ')||x.employee_number||x.id}))},{name:'program_id',label:'Program',type:'select',required:true,options:programs.map(x=>({value:x.id,label:x.name||x.id}))},{name:'reason',label:'Reason',type:'select',value:'pre_employment',options:['pre_employment','reasonable_suspicion','post_accident','return_to_duty','follow_up','other'].map(x=>({value:x,label:pretty(x)}))},{name:'test_type',label:'Test type',type:'select',value:C.surface==='dot'?'drug_and_alcohol':'drug',options:[{value:'drug',label:'Drug'},{value:'alcohol',label:'Alcohol'},{value:'drug_and_alcohol',label:'Drug + Alcohol'}]});
+    fields.push({name:'employee_id',label:'Employee / Driver',type:'select',required:true,options:employees.map(x=>({value:x.id,label:[x.first_name,x.last_name].filter(Boolean).join(' ')||x.employee_number||x.id}))},{name:'program_id',label:'Program',type:'select',required:true,options:programs.map(x=>({value:x.id,label:x.name||x.id}))},{name:'reason',label:'Reason',type:'select',value:'pre_employment',options:(C.surface==='workforce'?['pre_employment','random','reasonable_suspicion','post_accident','return_to_work','other']:['pre_employment','reasonable_suspicion','post_accident','return_to_duty','follow_up','other']).map(x=>({value:x,label:pretty(x)}))},{name:'test_type',label:'Test type',type:'select',value:C.surface==='dot'?'drug_and_alcohol':'drug',options:[{value:'drug',label:'Drug'},{value:'alcohol',label:'Alcohol'},{value:'drug_and_alcohol',label:'Drug + Alcohol'}]});
     modal('Create Testing Order',fields,async v=>{
       if(C.kind==='ctpa')return invoke('workforce-ctpa-testing',{action:'create',test:v});
       return invoke('workforce-employer-testing',{action:'create',test:v});
@@ -203,7 +227,8 @@ async function render(ctx){
   if(C.kind==='self')d=await selfData();else if(C.kind==='ctpa')d=await ctpaData(p);else d=await employerData(p);
   if(C.kind==='self')setSubtitle('View your own records and complete only the actions assigned to you.');
   else if(C.kind==='agency')setSubtitle(`${C.agency} company management workspace. Changes apply only to your company.`);
-  else setSubtitle('Manage your company records, people, programs, testing and compliance.');
+  else if(C.kind==='ctpa')setSubtitle('Manage employer customers, employees / drivers, NON-DOT programs, testing and compliance.');
+  else setSubtitle('Manage your company, employees / drivers, NON-DOT programs, testing and compliance.');
   let html='';
   if(p==='dashboard')html=dashboard(ctx,d);
   else if(p==='order-services'){
@@ -234,7 +259,18 @@ async function render(ctx){
     wireManagementActions(p,d,ctx);
   }
   else {
-    if(p==='company')html=profileView(d);
+    if(C.kind==='ctpa'&&p==='team')html=table('Team',d.members||[],COLS.members);
+    else if(C.kind==='ctpa'&&p==='locations')html=table('Locations',d.locations||[],COLS.locations);
+    else if(C.kind==='ctpa'&&p==='integrations')html=table('Integrations',d.integrations||[],COLS.integrations);
+    else if(C.kind==='ctpa'&&p==='audit-history')html=table('Audit History',d.audit_events||[],COLS.audit);
+    else if(C.kind==='ctpa'&&p==='branding')html=`<div class="panel"><div class="panel-head"><div><h2>Branding</h2><p>${d.can_manage?'Enterprise branding controls are enabled.':'Branding is view-only for this role.'}</p></div></div><div style="padding:16px"><div class="metrics">${metric('Portal Name',d.branding?.portal_name||'screenings4u Workforce')}${metric('Primary Color',d.branding?.primary_color||d.branding_defaults?.primary_color||'Default')}${metric('Accent Color',d.branding?.accent_color||d.branding_defaults?.accent_color||'Default')}</div></div></div>`;
+    else if(C.kind==='ctpa'&&p==='billing')html=`<div class="metrics">${metric('Client Invoices',(d.invoices||[]).length)}${metric('Employers',(d.employers||[]).length)}${metric('Payments Ready',d.payments_ready?'Yes':'No')}${metric('Plan',d.subscription?.plans?.name||d.subscription?.plan_name||'—')}</div><div class="section">${table('Client Invoices',d.invoices||[],COLS.invoices)}</div>`;
+    else if(p==='company')html=profileView(d);
+    else if(p==='consents')html=table('Consent & Acknowledgment Forms',d.forms||[],[['Form',['title']],['Type',['form_type']],['Version',['version']],['Status',['status'],badgeCell]])+`<div class="section">${table('Assignments',d.assignments||[],[['Employee',['employees.first_name']],['Form',['employer_consent_forms.title']],['Status',['status'],badgeCell],['Sent',['sent_at'],dateCell],['Completed',['completed_at'],dateCell]])}</div>`;
+    else if(p==='locations')html=table('Locations',d.locations||[],COLS.locations);
+    else if(p==='audit-history')html=table('Audit History',d.audit_events||[],COLS.audit);
+    else if(p==='branding')html=`<div class="panel"><div class="panel-head"><div><h2>Branding</h2><p>${d.can_edit?'Enterprise branding controls are available.':'Branding is inherited or not enabled for this plan.'}</p></div></div><div style="padding:16px">${metric('Portal Name',d.branding?.portal_name||'screenings4u Workforce')}${metric('Primary Color',d.branding?.primary_color||'Default')}${metric('Accent Color',d.branding?.accent_color||'Default')}</div></div>`;
+    else if(p==='integrations')html=`<div class="panel"><div class="panel-head"><div><h2>Integrations</h2><p>Available according to the selected subscription.</p></div></div><div style="padding:16px">${Object.entries(d.entitlements||{}).filter(([,v])=>v===true).map(([k])=>`<span class="badge" style="margin:4px">${esc(pretty(k))}</span>`).join('')||'<div class="empty">No enabled integrations for this plan.</div>'}</div></div>`;
     else if(p==='reports')html=`<div class="metrics">${metric('Testing',(d.testing||d.testing_orders||[]).length)}${metric('Programs',(d.program_enrollment||d.programs||[]).length)}${metric('Pools',(d.pool_membership||d.pools||[]).length)}${metric('Compliance',(d.compliance||d.cases||[]).length)}</div>`;
     else if(p==='post-accident')html=`<div class="notice">Post-accident activity is managed through Testing and Compliance. DOT service purchases are available from Order Services.</div><div class="section">${table('Post-Accident Testing',(d.testing_orders||[]).filter(x=>norm(x.reason)==='post_accident'),COLS.testing)}</div>`;
     else {const [rows,key]=pickManagementRows(p,d);html=key?table(cfgPage(p).label,rows,COLS[key]):`<div class="panel"><div class="empty">No records available.</div></div>`}
@@ -244,7 +280,7 @@ async function render(ctx){
 }
 
 async function init(){
-  try{const s=await getSession();if(!s){location.replace('/login.html');return}const ctx=await access();if(ctx.requires_workspace_selection){location.replace('/workspace.html');return}if(!ctx.has_access)throw new Error(ctx.reason||'Portal access denied.');saveMid(ctx.membership?.id);window.portalCtx=ctx;shell(ctx);await render(ctx)}
+  try{const s=await getSession();if(!s){location.replace('/login.html');return}const ctx=await access();if(ctx.requires_workspace_selection){location.replace('/workspace.html');return}if(!ctx.has_access)throw new Error(ctx.reason||'Portal access denied.');saveMid(ctx.membership?.id);saveSubscription(ctx.subscription?.id);window.portalCtx=ctx;shell(ctx);await render(ctx)}
   catch(e){if(e.status===401||e.message==='AUTH_REQUIRED'){await sb.auth.signOut();location.replace('/login.html');return}document.body.className='login-page';document.body.innerHTML=`<main class="login-card"><img class="login-logo" src="/assets/img/logo.png"><h1>Portal unavailable</h1><p>${esc(e.message||String(e))}</p><a class="btn primary" href="/login.html">Return to login</a></main>`}
 }
 window.Portal={invoke,sb};
