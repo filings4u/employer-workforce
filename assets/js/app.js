@@ -1,6 +1,6 @@
 (()=>{'use strict';
 const C=window.PORTAL_CONFIG;
-const STORAGE_SCHEMA='workforce-nondot-dot-shell-v1';
+const STORAGE_SCHEMA='workforce-nondot-separated-v4';
 if(localStorage.getItem('s4u_workforce_storage_schema')!==STORAGE_SCHEMA){
   ['ctpa_workforce','employer_workforce','employee_workforce','driver_workforce'].forEach(code=>{
     localStorage.removeItem(`s4u_${code}_membership`);
@@ -20,7 +20,7 @@ const norm=v=>String(v||'').trim().toLowerCase().replaceAll('_','-');
 const storageKey=()=>`s4u_${C.portalCode}_membership`, subKey=()=>`s4u_${C.portalCode}_subscription`;
 const stored=()=>localStorage.getItem(storageKey())||'', storedSub=()=>localStorage.getItem(subKey())||'';
 const cfgPage=id=>C.pages.find(x=>norm(x.id)===norm(id))||{id,label:pretty(id),icon:'•'};
-const apiName=()=>C.kind==='ctpa'?'workforce-ctpa-actions':C.kind==='employer'?'workforce-employer-operations':'workforce-employer-employee-access';
+const apiName=()=>C.kind==='ctpa'?'nondot-ctpa-portal':C.kind==='employer'?'workforce-employer-operations':'workforce-employer-employee-access';
 let ctx=null,data=null,NAV=[];
 
 async function session(){const {data:{session},error}=await sb.auth.getSession();if(error)throw error;return session}
@@ -33,7 +33,7 @@ async function invoke(name,body={}){
   if(!r.ok||d.error)throw new Error(d.error||d.reason||`Request failed (${r.status}).`);
   return d;
 }
-async function access(){return invoke('workforce-session-context',{requested_portal_code:C.portalCode,requested_page:page()})}
+async function access(){return invoke(apiName(),{action:'session_context',portal_code:C.portalCode,requested_portal_code:C.portalCode,requested_page:page()})}
 async function load(){const p=page();if(p==='billing'&&C.kind!=='self')return invoke('workforce-invoice-portal',{action:'list'});return invoke(apiName(),{action:'workspace',page:p})}
 
 function displayName(c){
