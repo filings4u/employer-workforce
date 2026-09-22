@@ -1,4 +1,3 @@
-document.addEventListener('DOMContentLoaded',()=>document.body.classList.remove('loading'));
 (()=>{'use strict';
 const C=window.PORTAL_CONFIG;
 const sb=window.supabase.createClient(C.workforceUrl,C.workforceKey,{auth:{persistSession:true,autoRefreshToken:true,detectSessionInUrl:true}});
