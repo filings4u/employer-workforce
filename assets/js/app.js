@@ -1,6 +1,7 @@
 (()=>{'use strict';
 const C=window.PORTAL_CONFIG;
-const STORAGE_SCHEMA='workforce-nondot-separated-v4';
+const MAIN_URL='https://rgsrubdtljyxmnihwlah.supabase.co',MAIN_KEY='sb_publishable_-pG3ePRGckIiK5ncn2hzgQ_jeJF1xFr';
+const STORAGE_SCHEMA='workforce-nondot-dot-shell-v1';
 if(localStorage.getItem('s4u_workforce_storage_schema')!==STORAGE_SCHEMA){
   ['ctpa_workforce','employer_workforce','employee_workforce','driver_workforce'].forEach(code=>{
     localStorage.removeItem(`s4u_${code}_membership`);
@@ -20,7 +21,7 @@ const norm=v=>String(v||'').trim().toLowerCase().replaceAll('_','-');
 const storageKey=()=>`s4u_${C.portalCode}_membership`, subKey=()=>`s4u_${C.portalCode}_subscription`;
 const stored=()=>localStorage.getItem(storageKey())||'', storedSub=()=>localStorage.getItem(subKey())||'';
 const cfgPage=id=>C.pages.find(x=>norm(x.id)===norm(id))||{id,label:pretty(id),icon:'•'};
-const apiName=()=>C.kind==='ctpa'?'nondot-ctpa-portal':C.kind==='employer'?'workforce-employer-operations':'workforce-employer-employee-access';
+const apiName=()=>C.kind==='ctpa'?'workforce-ctpa-actions':C.kind==='employer'?'workforce-employer-operations':'workforce-employer-employee-access';
 let ctx=null,data=null,NAV=[];
 
 async function session(){const {data:{session},error}=await sb.auth.getSession();if(error)throw error;return session}
@@ -33,8 +34,32 @@ async function invoke(name,body={}){
   if(!r.ok||d.error)throw new Error(d.error||d.reason||`Request failed (${r.status}).`);
   return d;
 }
-async function access(){return invoke(apiName(),{action:'session_context',portal_code:C.portalCode,requested_portal_code:C.portalCode,requested_page:page()})}
-async function load(){const p=page();if(p==='billing'&&C.kind!=='self')return invoke('workforce-invoice-portal',{action:'list'});return invoke(apiName(),{action:'workspace',page:p})}
+async function access(){return invoke('workforce-session-context',{requested_portal_code:C.portalCode,requested_page:page()})}
+async function invokeMain(body={}){
+  const s=await session();
+  if(!s)throw new Error('Your session has expired. Please sign in again.');
+  const r=await fetch(`${MAIN_URL}/functions/v1/workforce-portal-service-checkout`,{method:'POST',headers:{'Content-Type':'application/json','Authorization':`Bearer ${s.access_token}`,'apikey':MAIN_KEY},body:JSON.stringify({portal_code:C.portalCode,...body})});
+  const d=await r.json().catch(()=>({}));
+  if(!r.ok||d.error)throw new Error(d.error||`Purchase request failed (${r.status}).`);
+  return d;
+}
+async function loadServices(){const [catalog,history]=await Promise.all([invoke('workforce-service-store',{action:'catalog'}),invokeMain({action:'history'})]);return{...catalog,...history}}
+let stripeJsPromise=null;
+function loadStripeJs(){if(window.Stripe)return Promise.resolve();if(stripeJsPromise)return stripeJsPromise;stripeJsPromise=new Promise((resolve,reject)=>{const el=document.createElement('script');el.src='https://js.stripe.com/v3/';el.async=true;el.onload=()=>window.Stripe?resolve():reject(new Error('Stripe.js failed to initialize.'));el.onerror=()=>reject(new Error('Unable to load secure payment fields.'));document.head.appendChild(el)});return stripeJsPromise}
+async function showMountedCheckout(d){
+  if(!d?.client_secret||!d?.stripe_publishable_key)throw new Error('Secure payment session is incomplete.');
+  await loadStripeJs();
+  const b=document.createElement('div');b.className='modal-backdrop';b.innerHTML=`<div class="modal modal-wide"><h2>Secure Payment</h2><p style="color:#52657a;line-height:1.55;margin:0 0 12px">Complete payment below. You will remain inside your screenings4u Workforce portal.</p><div class="notice" style="margin-bottom:14px"><strong>${esc(d.service?.name||'Workforce Service')}</strong><div style="margin-top:4px">${money(d.service?.amount,d.service?.currency||'USD')}</div></div><div id="stripe-payment-element" style="min-height:180px"></div><div id="stripe-payment-message" style="margin-top:12px"></div><div class="modal-actions"><button class="btn ghost" data-close type="button">Cancel</button><button class="btn primary" data-pay type="button">Pay Securely</button></div></div>`;document.body.appendChild(b);
+  const close=()=>b.remove();b.querySelector('[data-close]').onclick=close;const pay=b.querySelector('[data-pay]'),msg=b.querySelector('#stripe-payment-message');
+  const stripe=window.Stripe(d.stripe_publishable_key);
+  const checkout=stripe.initCheckoutElementsSdk({clientSecret:d.client_secret});
+  const pe=checkout.createPaymentElement();pe.mount('#stripe-payment-element');
+  pay.onclick=async()=>{pay.disabled=true;pay.textContent='Processing…';msg.innerHTML='';try{const loaded=await checkout.loadActions();if(loaded.type==='error')throw new Error(loaded.error?.message||'Unable to initialize payment.');const result=await loaded.actions.confirm();if(result?.type==='error'||result?.error)throw new Error(result.error?.message||'Payment could not be completed.');const st=await invokeMain({action:'status',session_id:d.checkout_session_id});if(String(st.payment_status)==='paid'||String(st.status)==='complete'){close();await brandedMessage('Payment received','Your service purchase was successful. screenings4u Testing Operations is creating the linked testing case.','success');await refresh()}else{msg.innerHTML='<div class="notice"><strong>Payment processing</strong><div style="margin-top:4px">Stripe is still confirming this payment. This page will update automatically.</div></div>';setTimeout(()=>location.reload(),1800)}}catch(err){msg.innerHTML=`<div class="notice"><strong>Payment issue</strong><div style="margin-top:4px">${esc(err.message||String(err))}</div></div>`;pay.disabled=false;pay.textContent='Pay Securely'}};
+}
+function brandedMessage(title,message,type='info'){return new Promise(resolve=>{const b=modalShell(title,`<div class="notice" style="border-left:4px solid ${type==='success'?'#17764a':type==='error'?'#b42318':'#ef6c00'}"><div>${esc(message)}</div></div>`,`<button class="btn primary" data-ok type="button">Continue</button>`);b.querySelector('[data-ok]').onclick=()=>{b.remove();resolve(true)}})}
+
+
+async function load(){const p=page();if(p==='billing'&&C.kind!=='self')return invoke('workforce-invoice-portal',{action:'list'});if(p==='services'&&C.kind!=='self')return loadServices();return invoke(apiName(),{action:'workspace',page:p})}
 
 function displayName(c){
   return String(c?.membership?.organization_name||c?.organization_name||c?.workspace?.organization_name||c?.subscription?.plan_name||C.label||'screenings4u Workforce');
@@ -142,7 +167,7 @@ function quickCards(){
   if(!rows.length)return'';
   return `<div class="panel" style="margin-top:14px"><div class="panel-head"><div><h2>Quick Actions</h2><p>Open another area of your NON-DOT Workforce portal.</p></div></div><div class="cards" style="padding:14px">${rows.map(x=>`<a class="card" href="${esc(x.href)}"><strong>${esc(x.label)}</strong><span>${esc(cardCopy(norm(x.id)))}</span></a>`).join('')}</div></div>`;
 }
-function cardCopy(id){const m={employers:'Manage customer Employer accounts.',company:'Review company and contact information.',people:'Manage Employees and NON-DOT Drivers.',programs:'Create and maintain NON-DOT testing programs.',pools:'Manage NON-DOT random testing pools.',selections:'Review NON-DOT random selection events.',testing:'Create and track NON-DOT testing orders.',results:'Review testing results available to this account.',compliance:'Track company-policy compliance cases and tasks.',documents:'Review Workforce program documents.',consents:'Manage consents and acknowledgments.',reports:'Review available Workforce reporting.',notifications:'Review portal notifications.',billing:'Review billing and invoices.',team:'Review users and roles.',locations:'Manage company locations.',branding:'Review portal branding.',integrations:'Review enabled integrations.','audit-history':'Review account activity history.',profile:'Review your Workforce profile.','my-testing':'Review testing assigned to you.','my-results':'Review results available to you.',training:'Review your training records.',credentials:'Review your credentials.'};return m[id]||'Open this portal area.'}
+function cardCopy(id){const m={employers:'Manage customer Employer accounts.',company:'Review company and contact information.',people:'Manage Employees and NON-DOT Drivers.',programs:'Create and maintain NON-DOT testing programs.',pools:'Manage NON-DOT random testing pools.',selections:'Review NON-DOT random selection events.',testing:'Create and track NON-DOT testing orders.',results:'Review testing results available to this account.',compliance:'Track company-policy compliance cases and tasks.',documents:'Review Workforce program documents.',consents:'Manage consents and acknowledgments.',reports:'Review available Workforce reporting.',notifications:'Review portal notifications.',billing:'Review billing and invoices.',services:'Browse and purchase NON-DOT testing services for your workforce.',team:'Review users and roles.',locations:'Manage company locations.',branding:'Review portal branding.',integrations:'Review enabled integrations.','audit-history':'Review account activity history.',profile:'Review your Workforce profile.','my-testing':'Review testing assigned to you.','my-results':'Review results available to you.',training:'Review your training records.',credentials:'Review your credentials.'};return m[id]||'Open this portal area.'}
 function rowButtons(r,type){if(C.kind==='self')return'';return `<button class="btn ghost" style="padding:6px 9px" data-edit="${type}" data-id="${esc(r.id)}" type="button">Edit</button><button class="btn ghost" style="padding:6px 9px" data-delete="${type}" data-id="${esc(r.id)}" type="button">Delete</button>${type==='employee'&&C.kind==='employer'?`<button class="btn ghost" style="padding:6px 9px" data-invite="${esc(r.id)}" type="button">Invite</button>`:''}`}
 
 const employerFields=[
@@ -206,9 +231,21 @@ async function viewInvoice(id){
     const b=modalShell(`Invoice ${i.invoice_number||''}`,body,'<button class="btn ghost" data-close type="button">Close</button>',true);b.querySelector('[data-close]').onclick=()=>b.remove();
   }catch(err){notice(err.message||String(err))}
 }
-async function payInvoice(id){try{const d=await invoke('workforce-invoice-portal',{action:'payment_link',invoice_id:id});if(!d.checkout_url)throw new Error('No payment link is available for this invoice.');location.href=d.checkout_url}catch(err){notice(err.message||String(err))}}
+async function payInvoice(id){
+  try{
+    const d=await invoke('workforce-invoice-portal',{action:'payment_intent',invoice_id:id});
+    if(!d?.client_secret||!d?.publishable_key)throw new Error('Secure invoice payment is not ready.');
+    await loadStripeJs();
+    const i=d.invoice||{};
+    const b=document.createElement('div');b.className='modal-backdrop';b.innerHTML=`<div class="modal modal-wide"><h2>Pay Invoice ${esc(i.invoice_number||'')}</h2><p style="color:#52657a;line-height:1.55;margin:0 0 12px">Complete payment below. You will remain inside your screenings4u Workforce portal.</p><div class="notice" style="margin-bottom:14px"><strong>Amount Due</strong><div style="margin-top:4px">${money(i.amount_due||0,i.currency||'USD')}</div></div><div id="stripe-invoice-payment-element" style="min-height:180px"></div><div id="stripe-invoice-message" style="margin-top:12px"></div><div class="modal-actions"><button class="btn ghost" data-close type="button">Cancel</button><button class="btn primary" data-pay type="button">Pay Invoice</button></div></div>`;document.body.appendChild(b);
+    const close=()=>b.remove();b.querySelector('[data-close]').onclick=close;const pay=b.querySelector('[data-pay]'),msg=b.querySelector('#stripe-invoice-message');
+    const stripe=window.Stripe(d.publishable_key),elements=stripe.elements({clientSecret:d.client_secret,appearance:{theme:'stripe',variables:{colorPrimary:'#ff6b00',colorText:'#1d2d45',borderRadius:'10px'}}}),pe=elements.create('payment');pe.mount('#stripe-invoice-payment-element');
+    pay.onclick=async()=>{pay.disabled=true;pay.textContent='Processing…';try{const out=await stripe.confirmPayment({elements,confirmParams:{return_url:location.href},redirect:'if_required'});if(out.error)throw out.error;msg.innerHTML='<div class="notice"><strong>Payment submitted</strong><div style="margin-top:4px">Confirming your invoice payment…</div></div>';for(let n=0;n<10;n++){await new Promise(r=>setTimeout(r,1200));const x=await invoke('workforce-invoice-portal',{action:'detail',invoice_id:id}),inv=x.invoice||{};if(String(inv.status)==='paid'||Number(inv.amount_due||0)<=0){close();await brandedMessage('Invoice paid','Your invoice payment was received successfully.','success');await refresh();return}}close();await brandedMessage('Payment processing','Stripe accepted the payment. The invoice will update as confirmation completes.','info');await refresh()}catch(err){await brandedMessage('Invoice payment needs attention',err.message||String(err),'error');pay.disabled=false;pay.textContent='Pay Invoice'}};
+  }catch(err){await brandedMessage('Unable to open invoice payment',err.message||String(err),'error')}
+}
 
 function bindRows(){
+  $$('[data-buy-service]').forEach(b=>b.onclick=()=>buyService(b.dataset.buyService));
   $$('[data-edit]').forEach(b=>b.onclick=()=>edit(b.dataset.edit,b.dataset.id));
   $$('[data-delete]').forEach(b=>b.onclick=()=>remove(b.dataset.delete,b.dataset.id));
   $$('[data-invite]').forEach(b=>b.onclick=async()=>{try{const d=await invoke(apiName(),{action:'invite_employee',employee_id:b.dataset.invite});notice(`Self-service invitation sent${d.portal_code?` to ${pretty(d.portal_code)}`:''}.`,'good')}catch(err){notice(err.message||String(err))}});
@@ -229,7 +266,25 @@ function renderSelf(p){
   if(p==='consents')return table('Consents & Acknowledgments',data.consent_assignments||[],COLS.consents,r=>['pending','viewed'].includes(String(r.status))?`<button class="btn primary" style="padding:6px 9px" data-consent="${esc(r.id)}" type="button">Complete</button>`:'');
   return '<div class="panel"><div class="empty">No records available.</div></div>';
 }
+function serviceCard(x){return `<article class="panel" style="padding:18px;display:flex;flex-direction:column;gap:10px"><div><span class="badge">${esc(x.category||'Service')}</span></div><h3 style="margin:0;color:#173d78">${esc(x.name)}</h3><p style="margin:0;color:#63758a;line-height:1.55;min-height:48px">${esc(x.description||'screenings4u Workforce service')}</p><div style="display:flex;gap:8px;flex-wrap:wrap;font-size:12px;color:#52657a">${x.specimen?`<span><strong>Specimen:</strong> ${esc(x.specimen)}</span>`:''}${x.results?`<span><strong>Results:</strong> ${esc(x.results)}</span>`:''}</div><div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:auto;padding-top:8px"><strong style="font-size:20px;color:#173d78">${money(x.unit_price,x.currency)}</strong><button class="btn primary" data-buy-service="${esc(x.id)}" type="button">Purchase</button></div></article>`}
+function renderServicesPage(){
+  const services=data.services||[],groups=[...new Set(services.map(x=>x.category||'Services'))];
+  const orders=data.orders||[],cases=data.testing_cases||[];
+  const recent=orders.map(o=>{const c=cases.find(x=>x.order_id===o.id),item=(o.order_items||[])[0];return{...o,service_name:item?.services?.name||item?.metadata?.service_name||'Workforce Service',testing_status:c?.status||null,donor_name:c?.donor_name||o.metadata?.donor_name||null}});
+  return `${metrics([['Available Services',services.length,'Priced NON-DOT services'],['Recent Purchases',orders.length,'Workforce portal orders'],['Testing Cases',cases.length,'Linked screenings4u cases'],['Commerce','screenings4u','Secure Stripe checkout']])}<div style="height:16px"></div><div class="notice" style="margin-bottom:16px"><strong>Workforce Services</strong><div style="margin-top:4px">Choose a service, Employer (C/TPA accounts), Employee / NON-DOT Driver, and testing reason. Payment is processed securely by screenings4u and the paid order is linked directly to Testing Operations.</div></div>${groups.map(g=>`<div class="panel" style="margin-bottom:16px"><div class="panel-head"><div><h2>${esc(g)}</h2><p>Available for your NON-DOT Workforce account.</p></div></div><div style="padding:16px;display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:14px">${services.filter(x=>(x.category||'Services')===g).map(serviceCard).join('')}</div></div>`).join('')}<div style="height:4px"></div>${table('Recent Service Purchases',recent,[['Order',['order_number']],['Service',['service_name']],['Donor',['donor_name']],['Payment',['payment_status'],v=>badge(v)],['Testing',['testing_status'],v=>v?badge(v):'—'],['Total',['total'],(v,r)=>money(v,r.currency)],['Created',['created_at'],v=>fmt(v)]])}`;
+}
+function buyService(id){
+ const svc=(data.services||[]).find(x=>String(x.id)===String(id));if(!svc)return notice('Service is no longer available.');
+ const employers=data.employers||[],employees=data.employees||[];
+ const employerOptions=C.kind==='ctpa'?`<div class="field full"><label>Employer</label><select name="employer_id" required><option value="">Choose Employer</option>${employers.map(e=>`<option value="${esc(e.id)}">${esc(e.legal_name||e.workforce_display_name||'Employer')}</option>`).join('')}</select></div>`:'';
+ const employeeOptions=employees.map(e=>{const emp=employers.find(x=>String(x.id)===String(e.employer_id));return `<option value="${esc(e.id)}" data-employer="${esc(e.employer_id)}">${esc([e.first_name,e.last_name].filter(Boolean).join(' '))}${emp&&C.kind==='ctpa'?` — ${esc(emp.legal_name)}`:''}${e.workforce_worker_type==='driver'?' (NON-DOT Driver)':''}</option>`}).join('');
+ const b=document.createElement('div');b.className='modal-backdrop';b.innerHTML=`<form class="modal"><h2>${esc(svc.name)}</h2><p style="color:#52657a;line-height:1.6">${esc(svc.description||'Select the worker who will receive this service.')}</p><div class="modal-grid">${employerOptions}<div class="field full"><label>Employee / NON-DOT Driver</label><select name="employee_id" required><option value="">Choose Worker</option>${employeeOptions}</select></div><div class="field full"><label>Testing reason</label><select name="reason" required><option value="pre_employment">Pre-employment</option><option value="random">Random</option><option value="reasonable_suspicion">Reasonable suspicion</option><option value="post_accident">Post-accident</option><option value="return_to_work">Return to work</option><option value="follow_up">Follow-up</option><option value="other">Other</option></select></div></div><div class="notice" style="margin-top:14px"><strong>${money(svc.unit_price,svc.currency)}</strong><div style="margin-top:4px">Secure Stripe payment will open here inside your Workforce portal. Your Workforce account is already linked; no second screenings4u account is required.</div></div><div class="modal-actions"><button class="btn ghost" data-cancel type="button">Cancel</button><button class="btn primary" type="submit">Continue to Secure Payment</button></div></form>`;document.body.appendChild(b);b.querySelector('[data-cancel]').onclick=()=>b.remove();
+ const empSel=b.querySelector('[name="employer_id"]'),workerSel=b.querySelector('[name="employee_id"]');if(empSel)empSel.onchange=()=>{const eid=empSel.value;[...workerSel.options].forEach((o,i)=>{if(i===0)return;o.hidden=!!eid&&o.dataset.employer!==eid});workerSel.value=''};
+ b.querySelector('form').onsubmit=async e=>{e.preventDefault();const btn=e.currentTarget.querySelector('[type="submit"]');btn.disabled=true;btn.textContent='Loading Secure Payment…';try{const v=Object.fromEntries(new FormData(e.currentTarget).entries()),d=await invokeMain({action:'checkout',offering_id:svc.id,employer_id:v.employer_id||undefined,employee_id:v.employee_id,reason:v.reason});b.remove();await showMountedCheckout(d)}catch(err){await brandedMessage('Unable to start payment',err.message||String(err));btn.disabled=false;btn.textContent='Continue to Secure Payment'}};
+}
+
 function renderMgmt(p){
+  if(p==='services')return renderServicesPage();
   if(p==='dashboard'){
     const top=C.kind==='ctpa'?
       [['Client Employers',(data.employers||[]).length,'Managed Employer accounts'],['Workers',(data.employees||[]).length,'Employees / NON-DOT Drivers'],['NON-DOT Programs',(data.programs||[]).length,'Company-policy programs'],['Testing Orders',(data.testing_orders||[]).length,'NON-DOT testing activity']]:
@@ -292,6 +347,7 @@ function subtitleFor(p){
     reports:'Review reporting available for the NON-DOT Workforce program.',
     notifications:'Review Workforce notifications and delivery activity.',
     billing:'Review NON-DOT Workforce invoices and balances.',
+    services:'Purchase screenings4u NON-DOT testing services for your Employees and NON-DOT Drivers.',
     team:'Review portal users and roles.',
     locations:'Manage Workforce locations.',
     branding:'Review Workforce portal branding.',
@@ -306,6 +362,7 @@ function subtitleFor(p){
   return common[p]||'Manage NON-DOT Workforce information for this portal.';
 }
 async function refresh(){
+  if(page()==='services'){const q=new URLSearchParams(location.search);if(q.get('checkout')==='return'&&q.get('session_id')){const sid=q.get('session_id');history.replaceState({},'',location.pathname);setTimeout(async()=>{try{const st=await invokeMain({action:'status',session_id:sid});if(String(st.payment_status)==='paid'||String(st.status)==='complete'){await brandedMessage('Payment received','Your payment is complete and the testing request is being linked to your Workforce account.','success');await refresh()}else await brandedMessage('Payment processing','Stripe is still confirming this payment. Your purchase will appear here when processing finishes.')}catch(err){await brandedMessage('Payment status unavailable',err.message||String(err))}},80)}}
   try{
     data=await load();
     if($('#actions'))$('#actions').innerHTML='';
